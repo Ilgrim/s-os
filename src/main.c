@@ -7,15 +7,25 @@
 #define	TRUE	(1)
 #endif
 
+#define	WRD		0x1FAC
+#define	WOPEN	0x1FAF
+#define	PRTHX	0x1FC1
 #define	BELL	0x1FC4
 #define	PAUSE	0x1FC7
 #define	GETLKN	0x1FD3
 #define	LETNL	0x1FEE
-#define	MPRNT	0x1FF4
+#define	PRINT	0x1FF4
+
+#define	MPRNT	0x1FE2	// メッセージプリント (CALL直後の文字列出力)
+#define	MSG		0x1FE8	// メッセージ (DEの文字列出力)
+#define	SETCUR	0x201E	// カーソル位置セット？
+#define	GETKEY	0x2021	// キー入力？
 
 
 #define OpZ80(A) RdZ80(A)
 #define M_RET R->PC.B.l=OpZ80(R->SP.W++);R->PC.B.h=OpZ80(R->SP.W++);JumpZ80(R->PC.W)
+#define M_POP(Rg)      \
+  R->Rg.B.l=OpZ80(R->SP.W++);R->Rg.B.h=OpZ80(R->SP.W++)
 
 
 #define	RamSize		(256 * 256)
@@ -40,18 +50,55 @@ byte InZ80(register word Port) {
 void PatchZ80(register Z80 *R) {
 }
 
-word LoopZ80(register Z80 *R) {
-	static char line[1024];
-	static int lp = 0;
+static char line[1024];
+static int lp = 0;
 
+static void print_char(int c) {
+	switch (c) {
+	default:
+		putchar(c);
+		line[lp++] = c;
+		break;
+	case 0x0d:
+		putchar('\n');
+		lp = 0;
+		break;
+	}
+}
+
+word LoopZ80(register Z80 *R) {
 	word pc = R->PC.W;
 	if (pc < 0x3000) {
 		switch (pc) {
 		default:
-			pc = pc;
+			M_RET		// dmy
+			break;
+		case WRD:		// 書き込みー
+			// DE: 開始番地？
+			// HL: サイズ？
+			{
+				FILE* fp = fopen("__dmy", "wb");
+				if (fp != NULL) {
+					const char* p = &ram[R->DE.W];
+					int size = R->HL.W;
+					fwrite(p, 1, size, fp);
+					fclose(fp);
+				}
+			}
+			M_RET
+			break;
+		case WOPEN:		// 書き込みオープン
+			// C flag ... エラー
+			R->AF.B.l = 0;
+			M_RET
+			break;
+		case PRTHX:
+			printf("%02X", R->AF.B.h);
+			lp += 2;
+			M_RET
 			break;
 		case BELL:
-			// beep
+			putchar('\a');
 			M_RET
 			break;
 		case PAUSE:
@@ -67,8 +114,11 @@ word LoopZ80(register Z80 *R) {
 				memcpy(buf, line, lp);
 				len = strlen(p);
 				if (len > 0 && buf[len-1] == '\n') {
-					buf[len-1] = '\0';
+					buf[--len] = '\0';
 				}
+				buf[len] = 0x0d;
+				buf[len+1] = '\0';
+				lp = 0;
 				// Ctrl+Cの処理
 			}
 			M_RET
@@ -78,19 +128,47 @@ word LoopZ80(register Z80 *R) {
 			lp = 0;
 			M_RET
 			break;
-		case MPRNT:
+		case PRINT:
 			{
 				int c = R->AF.B.h;
-				switch (c) {
-				default:
-					putchar(c);
-					line[lp++] = c;
-					break;
-				case 0x0d:
-					putchar('\n');
-					lp = 0;
-					break;
+				print_char(c);
+			}
+			M_RET
+			break;
+
+		// 半信半疑のもの
+		case MPRNT:
+			{
+				M_POP(HL);
+				for (;;) {
+					int c = RdZ80(R->HL.W);
+					R->HL.W++;
+					if (c == '\0')	break;
+					print_char(c);
 				}
+				R->PC.W = R->HL.W;
+			}
+			break;
+		case MSG:
+			{
+				for (;;) {
+					int c = RdZ80(R->DE.W);
+					R->DE.W++;
+					if (c == 0x0d)	break;
+					print_char(c);
+				}
+			}
+			M_RET
+			break;
+		case GETKEY:
+			{
+				int c = getchar();
+				R->AF.B.h = c;
+			}
+			M_RET
+			break;
+		case SETCUR:
+			{
 			}
 			M_RET
 			break;
@@ -172,8 +250,11 @@ int main(int argc, char* argv[]) {
 	z80.SP.W = 0x0000;
 
 	fn = argv[1];
-	if (load_obj(&z80, fn)) {
-		run(&z80);
+	if (!load_obj(&z80, fn)) {
+		fprintf(stderr, "Load failed: %s\n", fn);
+		return 1;
 	}
+
+	run(&z80);
 	return 0;
 }
