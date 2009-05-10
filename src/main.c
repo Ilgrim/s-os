@@ -30,6 +30,20 @@
 #define	WIDCH	0x2030	// ‰æ–Ê‰¡••ÏXH
 
 
+#ifdef _WIN32
+#define KBHIT()  _kbhit()
+#define GETCH()  _getch()
+#else
+#define KBHIT()  1
+#define GETCH()  _getch()
+
+int _getch() {
+	int c;
+	read(0, &c, sizeof(char));
+	return c;
+}
+#endif
+
 #define OpZ80(A) RdZ80(A)
 #define M_RET R->PC.B.l=OpZ80(R->SP.W++);R->PC.B.h=OpZ80(R->SP.W++);JumpZ80(R->PC.W)
 #define M_POP(Rg)      \
@@ -62,15 +76,40 @@ static char line[1024];
 static int lp = 0;
 
 static void print_char(int c) {
-	switch (c) {
-	default:
+	if (0xa0 <= c && c <= 0xdf) {
+#if 1
+		// utf-8
+		int uc = 0xff60 + (c - 0xa0);
+		putchar(uc);
+#else
 		putchar(c);
-		line[lp++] = c;
-		break;
-	case 0x0d:
-		putchar('\n');
-		lp = 0;
-		break;
+#endif
+	} else {
+		switch (c) {
+		default:
+			putchar(c);
+			line[lp++] = c;
+			break;
+		case 0x0c:  // cls
+			printf("\x1b[2J\x1b[0;0H");
+			break;
+		case 0x0d:
+			putchar('\n');
+			lp = 0;
+			break;
+		case 28:  // up?
+			printf("\x1b[1A");
+			break;
+		case 29:  // left
+			printf("\x1b[1D");
+			break;
+		case 30:  // right?
+			printf("\x1b[1C");
+			break;
+		case 31:  // down
+			printf("\x1b[1B");
+			break;
+		}
 	}
 }
 
@@ -203,9 +242,9 @@ word LoopZ80(register Z80 *R) {
 			break;
 		case SETCUR:
 			{
-				int x = R->BC.B.h;
-				int y = R->BC.B.l;
-//				printf("\x1b[%d;%dH", x, y);
+				int x = R->HL.B.h;
+				int y = R->HL.B.l;
+				printf("\x1b[%d;%dH", x + 1, y + 1);
 			}
 			M_RET
 			break;
@@ -214,8 +253,8 @@ word LoopZ80(register Z80 *R) {
 			M_RET
 			break;
 		case GETKY:
-			if (_kbhit()) {
-				R->AF.B.h = _getch();
+			if (KBHIT()) {
+				R->AF.B.h = GETCH();
 			} else {
 				R->AF.B.h = 0x00;
 			}
