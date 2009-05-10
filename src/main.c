@@ -1,6 +1,9 @@
 #include "Z80.h"
 #include <stdio.h>
 #include <string.h>
+#ifdef _WIN32
+#include <conio.h>
+#endif
 
 #ifndef	FALSE
 #define	FALSE	(0)
@@ -9,6 +12,7 @@
 
 #define	WRD		0x1FAC
 #define	WOPEN	0x1FAF
+#define	PRTHL	0x1FBE
 #define	PRTHX	0x1FC1
 #define	BELL	0x1FC4
 #define	PAUSE	0x1FC7
@@ -16,10 +20,14 @@
 #define	LETNL	0x1FEE
 #define	PRINT	0x1FF4
 
+#define	BRKEY	0x1FCD	// ブレークキーが押された？
+#define	GETKY	0x1FD0	// １文字入力？
 #define	MPRNT	0x1FE2	// メッセージプリント (CALL直後の文字列出力)
+#define	MSX		0x1FE5	// メッセージ (DEの文字列出力)
 #define	MSG		0x1FE8	// メッセージ (DEの文字列出力)
 #define	SETCUR	0x201E	// カーソル位置セット？
 #define	GETKEY	0x2021	// キー入力？
+#define	WIDCH	0x2030	// 画面横幅変更？
 
 
 #define OpZ80(A) RdZ80(A)
@@ -66,6 +74,24 @@ static void print_char(int c) {
 	}
 }
 
+static word print(word adr) {
+	for (;;) {
+		int c = RdZ80(adr);
+		adr++;
+		if (c == '\0')	break;
+		print_char(c);
+	}
+	return adr;
+}
+
+static void print_buf(const char* str) {
+	for (;;) {
+		int c = *str++;
+		if (c == '\0')	break;
+		print_char(c);
+	}
+}
+
 word LoopZ80(register Z80 *R) {
 	word pc = R->PC.W;
 	if (pc < 0x3000) {
@@ -73,7 +99,7 @@ word LoopZ80(register Z80 *R) {
 		default:
 			M_RET		// dmy
 			break;
-		case WRD:		// 書き込みー
+		case WRD:		// 書き込み
 			// DE: 開始番地？
 			// HL: サイズ？
 			{
@@ -108,7 +134,7 @@ word LoopZ80(register Z80 *R) {
 		case GETLKN:
 			{
 				char* buf = &ram[R->DE.W ];
-				int bufsiz=  R->AF.B.h;
+				int bufsiz=  R->AF.B.h > 0 ? R->AF.B.h : 256;
 				char* p = fgets(buf + lp, bufsiz - lp, stdin);
 				int len;
 				memcpy(buf, line, lp);
@@ -128,6 +154,15 @@ word LoopZ80(register Z80 *R) {
 			lp = 0;
 			M_RET
 			break;
+		case PRTHL:
+			{
+				int v = R->HL.W;
+				char buf[16];
+				sprintf(buf, "%04X", v);
+				print_buf(buf);
+			}
+			M_RET
+			break;
 		case PRINT:
 			{
 				int c = R->AF.B.h;
@@ -140,12 +175,7 @@ word LoopZ80(register Z80 *R) {
 		case MPRNT:
 			{
 				M_POP(HL);
-				for (;;) {
-					int c = RdZ80(R->HL.W);
-					R->HL.W++;
-					if (c == '\0')	break;
-					print_char(c);
-				}
+				R->HL.W = print(R->HL.W);
 				R->PC.W = R->HL.W;
 			}
 			break;
@@ -160,6 +190,10 @@ word LoopZ80(register Z80 *R) {
 			}
 			M_RET
 			break;
+		case MSX:
+			R->DE.W = print(R->DE.W);
+			M_RET
+			break;
 		case GETKEY:
 			{
 				int c = getchar();
@@ -169,6 +203,28 @@ word LoopZ80(register Z80 *R) {
 			break;
 		case SETCUR:
 			{
+				int x = R->BC.B.h;
+				int y = R->BC.B.l;
+//				printf("\x1b[%d;%dH", x, y);
+			}
+			M_RET
+			break;
+		case BRKEY:
+			// @todo
+			M_RET
+			break;
+		case GETKY:
+			if (_kbhit()) {
+				R->AF.B.h = _getch();
+			} else {
+				R->AF.B.h = 0x00;
+			}
+			M_RET
+			break;
+		case WIDCH:
+			{
+				int w = R->AF.B.h;
+				// なんか
 			}
 			M_RET
 			break;
@@ -189,6 +245,7 @@ int hex(char c) {
 	if ('0' <= c && c <= '9')	return c - '0';
 	if ('A' <= c && c <= 'F')	return c - ('A' - 10);
 	if ('a' <= c && c <= 'f')	return c - ('a' - 10);
+	if (c == ' ')	return 0;	// patch
 	return -1;
 }
 
